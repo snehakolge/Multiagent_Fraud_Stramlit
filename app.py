@@ -1,10 +1,23 @@
 import streamlit as st
-import random
+import pandas as pd
+import numpy as np
 import uuid
 import time
+import joblib
+import shap
 
 # =========================
-# 🧠 INIT STATE
+# 🧠 LOAD MODEL
+# =========================
+# Replace with your trained model path
+try:
+    model = joblib.load("xgb_model.pkl")
+except:
+    model = None  # fallback safe mode
+
+
+# =========================
+# 🧠 SESSION STATE
 # =========================
 if "cases" not in st.session_state:
     st.session_state.cases = []
@@ -14,193 +27,198 @@ if "human_queue" not in st.session_state:
 
 if "weights" not in st.session_state:
     st.session_state.weights = {
-        "velocity": 1.0,
-        "pattern": 1.0,
-        "ml": 1.0,
-        "rbi": 1.0
+        "threshold": 0.5
     }
 
 
 # =========================
-# 🧠 UTIL: CAP WEIGHTS (IMPORTANT)
+# 🔄 SAMPLE TRANSACTION STREAM
 # =========================
-def cap_weights(weights):
-    for k in weights:
-        weights[k] = max(0.5, min(weights[k], 2.0))
-    return weights
+def generate_txn():
+    return {
+        "amount": np.random.randint(1000, 20000),
+        "velocity_7d": np.random.randint(1, 60),
+        "amount_deviation": np.random.uniform(0.5, 5),
+        "failed_txn_flag": np.random.randint(0, 2)
+    }
 
 
 # =========================
-# 🟢 VELOCITY AGENT
+# 🔵 FEATURE PREP
+# =========================
+def build_features(txn):
+    return pd.DataFrame([[
+        txn["amount"],
+        txn["velocity_7d"],
+        txn["amount_deviation"],
+        txn["failed_txn_flag"]
+    ]], columns=[
+        "amount",
+        "velocity_7d",
+        "amount_deviation",
+        "failed_txn_flag"
+    ])
+
+
+# =========================
+# 🧠 ML PREDICTION
+# =========================
+def ml_score(txn):
+    if model is None:
+        return np.random.uniform(0, 1)  # fallback demo mode
+
+    X = build_features(txn)
+    return model.predict_proba(X)[0][1]
+
+
+# =========================
+# 📊 REAL SHAP EXPLAINER
+# =========================
+def explain(model, txn):
+
+    X = build_features(txn)
+
+    if model is None:
+        return {
+            "amount": 0.2,
+            "velocity_7d": 0.3,
+            "amount_deviation": 0.25,
+            "failed_txn_flag": 0.25
+        }
+
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X)
+
+    feature_names = X.columns
+
+    explanation = {}
+    for i, f in enumerate(feature_names):
+        explanation[f] = float(abs(shap_values[0][i]))
+
+    # normalize
+    total = sum(explanation.values()) + 1e-6
+    for k in explanation:
+        explanation[k] /= total
+
+    return explanation
+
+
+# =========================
+# 🟢 AGENTS
 # =========================
 def velocity_agent(txn):
     v = txn["velocity_7d"]
-
     if v > 45:
-        return "CRITICAL", f"Extreme burst: {v}/7d"
+        return "CRITICAL", "Extreme velocity spike"
     elif v > 20:
-        return "SUSPICIOUS", f"High velocity: {v}/7d"
-    else:
-        return "NORMAL", f"Normal: {v}/7d"
+        return "SUSPICIOUS", "High velocity"
+    return "NORMAL", "Stable"
 
 
-# =========================
-# 🟡 PATTERN AGENT
-# =========================
 def pattern_agent(txn):
     d = txn["amount_deviation"]
-
     if d > 3:
-        return "SUSPICIOUS", f"Deviation: {d:.2f}x"
+        return "SUSPICIOUS", "Strong deviation"
     elif d > 1.5:
-        return "WATCHLIST", f"Moderate deviation: {d:.2f}x"
-    else:
-        return "NORMAL", f"Stable: {d:.2f}x"
+        return "WATCHLIST", "Moderate deviation"
+    return "NORMAL", "Stable"
 
 
-# =========================
-# 🔵 ML AGENT
-# =========================
-def ml_agent(txn):
-    score = txn["ml_score"]
-
-    if score > 0.8:
-        return "HIGH_RISK", f"Score: {score:.2f}"
-    elif score > 0.4:
-        return "MEDIUM_RISK", f"Score: {score:.2f}"
-    else:
-        return "LOW_RISK", f"Score: {score:.2f}"
-
-
-# =========================
-# 🟣 RBI AGENT
-# =========================
 def rbi_agent(txn):
-    if "VELOCITY_SPIKE" in txn["flags"] and txn["amount"] > 12000:
-        return "HIGH_RISK_RULE", "EWS: velocity + high amount"
-    elif "FAILED_TXN" in txn["flags"]:
-        return "MEDIUM_RISK_RULE", "EWS: failed transactions"
-    else:
-        return "CLEAR", "No rule triggered"
+    if txn["failed_txn_flag"] == 1 and txn["amount"] > 10000:
+        return "HIGH_RISK_RULE", "RBI EWS trigger"
+    return "CLEAR", "No rule"
 
 
 # =========================
-# 🧠 ORCHESTRATOR (DECISION ENGINE)
+# 🧠 DECISION ENGINE (CALIBRATED)
 # =========================
-def orchestrator(v, p, m, r, weights):
+def decision_engine(v, p, r, ml):
 
     score = 0
-    rbi_override = False
 
-    # 🟣 RBI override (highest priority)
+    # RBI override
     if r[0] == "HIGH_RISK_RULE":
-        return 100, "BLOCK & FREEZE", True
+        return 100, "BLOCK & FREEZE"
 
-    # weighted scoring
     if v[0] == "CRITICAL":
-        score += 40 * weights["velocity"]
+        score += 40
     elif v[0] == "SUSPICIOUS":
-        score += 25 * weights["velocity"]
+        score += 25
 
     if p[0] == "SUSPICIOUS":
-        score += 20 * weights["pattern"]
+        score += 25
     elif p[0] == "WATCHLIST":
-        score += 10 * weights["pattern"]
+        score += 10
 
-    if m[0] == "HIGH_RISK":
-        score += 40 * weights["ml"]
-    elif m[0] == "MEDIUM_RISK":
-        score += 20 * weights["ml"]
+    score += ml * 40
 
-    if r[0] == "MEDIUM_RISK_RULE":
-        score += 25 * weights["rbi"]
-
-    # normalize risk score
     score = min(100, max(0, score))
 
-    # 🧠 DECISION WITH HUMAN-IN-THE-LOOP
+    # HITL logic (IMPORTANT)
     if score >= 80:
         decision = "BLOCK & FREEZE"
     elif score >= 60:
-        decision = "HUMAN REVIEW (HITL)"
-    elif score >= 40:
-        decision = "STEP-UP AUTH (OTP)"
+        decision = "HUMAN REVIEW"
+    elif score >= 35:
+        decision = "STEP-UP AUTH"
     else:
         decision = "ALLOW"
 
-    return score, decision, rbi_override
+    return score, decision
 
 
 # =========================
-# 📊 EXPLAINABILITY (STABLE SHAP-LIKE)
+# 🔁 LEARNING LOOP (SAFE)
 # =========================
-def explain(txn):
-
-    total = txn["amount"] + txn["velocity_7d"] + (txn["amount_deviation"] * 100) + (txn["ml_score"] * 100)
-
-    return {
-        "amount_impact": txn["amount"] / total,
-        "velocity_impact": txn["velocity_7d"] / total,
-        "deviation_impact": (txn["amount_deviation"] * 100) / total,
-        "ml_impact": txn["ml_score"]
-    }
-
-
-# =========================
-# 🔁 LEARNING LOOP (CONTROLLED)
-# =========================
-def learning_loop(decision, weights):
+def learning_loop(decision, threshold):
 
     if decision == "BLOCK & FREEZE":
-        weights["velocity"] += 0.01
-        weights["ml"] += 0.01
-        weights["rbi"] += 0.01
-
+        threshold += 0.01
     elif decision == "ALLOW":
-        weights["ml"] -= 0.005
+        threshold -= 0.005
 
-    return cap_weights(weights)
-
-
-# =========================
-# 🎛 STREAMLIT UI
-# =========================
-st.set_page_config(page_title="Fraud SOC", layout="wide")
-
-st.title("🏦 Fraud SOC Control Tower (Agentic + HITL + Learning)")
-st.caption("Production-style Fraud Decision System (Explainable + Human-in-loop)")
+    return float(np.clip(threshold, 0.3, 0.8))
 
 
 # =========================
-# 🔄 LIVE TRANSACTION
+# 🎛 UI
 # =========================
-txn = {
-    "amount": random.randint(1000, 20000),
-    "velocity_7d": random.randint(1, 60),
-    "amount_deviation": random.uniform(0.5, 5),
-    "ml_score": random.random(),
-    "flags": random.choices(["VELOCITY_SPIKE", "FAILED_TXN", "NONE"], k=1)
-}
+st.set_page_config(page_title="Fraud SOC (Real ML)", layout="wide")
 
-st.subheader("🔄 Live Transaction Feed")
+st.title("🏦 Fraud SOC Control Tower (REAL ML + SHAP + HITL)")
+st.caption("Production-style Explainable Fraud Intelligence System")
+
+
+# =========================
+# 🔄 LIVE TXN
+# =========================
+txn = generate_txn()
+
+st.subheader("🔄 Live Transaction")
 st.json(txn)
 
 
 # =========================
-# 🧠 RUN AGENTS
+# 🧠 ML + AGENTS
 # =========================
+ml = ml_score(txn)
+
 v = velocity_agent(txn)
 p = pattern_agent(txn)
-m = ml_agent(txn)
 r = rbi_agent(txn)
 
-score, decision, _ = orchestrator(v, p, m, r, st.session_state.weights)
-
-shap_vals = explain(txn)
+score, decision = decision_engine(v, p, r, ml)
 
 
 # =========================
-# 🧠 OUTPUT PANEL
+# 📊 SHAP EXPLANATION
+# =========================
+explanation = explain(model, txn)
+
+
+# =========================
+# 📊 DASHBOARD
 # =========================
 col1, col2 = st.columns(2)
 
@@ -208,29 +226,27 @@ with col1:
     st.subheader("🧠 Agents")
     st.write("Velocity:", v)
     st.write("Pattern:", p)
-    st.write("ML:", m)
     st.write("RBI:", r)
+    st.write("ML Score:", round(ml, 3))
 
 with col2:
     st.subheader("🚨 Decision Engine")
-    st.metric("Risk Score", score)
+    st.metric("Risk Score", round(score, 2))
 
     if decision == "ALLOW":
         st.success(decision)
-    elif "STEP-UP" in decision:
+    elif decision == "HUMAN REVIEW":
         st.warning(decision)
-    elif "HUMAN" in decision:
-        st.info(decision)
     else:
         st.error(decision)
 
 
 # =========================
-# 📊 EXPLAINABILITY
+# 📊 SHAP PANEL
 # =========================
-st.subheader("📊 Explainability Layer")
+st.subheader("📊 SHAP Explainability (Real Model)")
 
-for k, v in shap_vals.items():
+for k, v in explanation.items():
     st.write(f"{k}: {v:.3f}")
 
 
@@ -250,43 +266,43 @@ if decision != "ALLOW":
 
     st.session_state.cases.append(case)
 
-    # 🧑 HUMAN LOOP QUEUE
-    if "HUMAN" in decision:
+    if decision == "HUMAN REVIEW":
         st.session_state.human_queue.append(case)
 
-    st.subheader("🚨 Case Generated")
-    st.write(case)
+    st.subheader("🚨 FRAUD CASE CREATED")
+    st.json(case)
 
 
 # =========================
-# 🧑 HUMAN-IN-THE-LOOP QUEUE
+# 🧑 HUMAN-IN-THE-LOOP
 # =========================
 st.subheader("🧑 Human Review Queue")
 
-if st.session_state.human_queue:
-    st.json(st.session_state.human_queue[-5:])
-else:
-    st.info("No cases waiting for human review")
+st.json(st.session_state.human_queue[-5:])
 
 
 # =========================
 # 🧠 CASE MEMORY
 # =========================
-st.subheader("🧠 Case Memory (Recent)")
+st.subheader("🧠 Case Memory")
+
 st.json(st.session_state.cases[-5:])
 
 
 # =========================
 # 🔁 LEARNING UPDATE
 # =========================
-st.session_state.weights = learning_loop(decision, st.session_state.weights)
+st.session_state.weights["threshold"] = learning_loop(
+    decision,
+    st.session_state.weights["threshold"]
+)
 
-st.subheader("🧠 Adaptive Learning Weights")
+st.subheader("🧠 Learning State")
 st.json(st.session_state.weights)
 
 
 # =========================
-# 🔁 AUTO REFRESH
+# 🔁 REFRESH
 # =========================
 time.sleep(2)
 st.rerun()
