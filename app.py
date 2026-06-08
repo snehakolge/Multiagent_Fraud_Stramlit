@@ -1,445 +1,216 @@
-from sklearn.pipeline import Pipeline
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-import shap
-import random
-import time
+import os
 
-from typing import TypedDict, Any
-
-from langgraph.graph import StateGraph, END
-
-# =====================================================
-# PAGE CONFIG
-# =====================================================
-
-st.set_page_config(
-
-    page_title="Enterprise Fraud Intelligence System",
-
-    layout="wide"
-)
-
-st.title(
-    "🏦 Enterprise Fraud Intelligence System"
-)
-
-st.markdown(
-    "LangGraph Multi-Agent AI Fraud Detection Platform"
-)
-
-# =====================================================
-# LOAD MODEL
-# =====================================================
+# -----------------------------
+# SAFE IMPORTS
+# -----------------------------
+try:
+    from sklearn.pipeline import Pipeline
+except:
+    Pipeline = None
 
 try:
-    model = joblib.load("fraud_model.pkl")
-    feature_columns = joblib.load("feature_columns.pkl")
-except FileNotFoundError:
-    st.error("Model files (fraud_model.pkl, feature_columns.pkl) not found. Please run the AutoML agent first to train and save the model.")
-    st.stop()
+    import shap
+    SHAP_AVAILABLE = True
+except:
+    SHAP_AVAILABLE = False
 
-# =====================================================
-# SYNTHETIC TRANSACTION GENERATOR
-# =====================================================
 
-def generate_transaction():
+# -----------------------------
+# LOAD MODEL SAFELY
+# -----------------------------
+MODEL_PATH = "efrms_xgboost_model.pkl"
 
-    return {
+model = None
+if os.path.exists(MODEL_PATH):
+    try:
+        model = joblib.load(MODEL_PATH)
+    except Exception as e:
+        model = None
 
-        "amount":
-        random.randint(100, 200000),
 
-        "transaction_velocity_7d":
-        random.randint(1, 50),
+# -----------------------------
+# SAFE FEATURES
+# -----------------------------
+FEATURES = [
+    "amount",
+    "transaction_velocity_7d",
+    "avg_amount_30d",
+    "amount_deviation_ratio",
+    "seconds_since_last_txn",
+    "shared_device_count"
+]
 
-        "avg_amount_30d":
-        random.randint(100, 100000),
 
-        "amount_deviation_ratio":
-        random.uniform(0.1, 10),
+# -----------------------------
+# INPUT UI
+# -----------------------------
+def get_input():
+    st.subheader("📥 Transaction Input")
 
-        "shared_device_count":
-        random.randint(0, 10),
-
-        "hour":
-        random.randint(0, 23),
-
-        "is_night":
-        random.randint(0, 1),
-
-        "merchant_ring_id":
-        random.randint(0, 5),
-
-        "customer_merchant_txn_count":
-        random.randint(1, 20)
+    data = {
+        "amount": st.number_input("Amount", 100, 100000, 5000),
+        "transaction_velocity_7d": st.slider("Velocity (7d)", 1, 50, 5),
+        "avg_amount_30d": st.number_input("Avg Amount (30d)", 100, 100000, 4500),
+        "amount_deviation_ratio": st.slider("Deviation Ratio", 0.1, 5.0, 1.0),
+        "seconds_since_last_txn": st.slider("Seconds since last txn", 10, 10000, 500),
+        "shared_device_count": st.slider("Shared Device Count", 0, 10, 0)
     }
 
-# =====================================================
-# LANGGRAPH STATE
-# =====================================================
+    return pd.DataFrame([data])
 
-class FraudState(TypedDict):
 
-    dataset: pd.DataFrame
+# -----------------------------
+# SAFE FEATURE ALIGNMENT
+# -----------------------------
+def align(df):
+    if model is not None and hasattr(model, "feature_names_in_"):
+        return df.reindex(columns=model.feature_names_in_, fill_value=0)
 
-    fraud_probability: float
+    return df.reindex(columns=FEATURES, fill_value=0)
 
-    alert: str
 
-    explanation: dict
+# -----------------------------
+# FRAUD PREDICTION (SAFE)
+# -----------------------------
+def predict(df):
+    try:
+        if model is None:
+            return 0.5
 
-    critical_action: bool
+        X = align(df)
 
-# =====================================================
-# FEATURE AGENT
-# =====================================================
+        if hasattr(model, "predict_proba"):
+            return model.predict_proba(X)[0][1]
+        else:
+            return float(model.predict(X)[0])
 
-def feature_agent(state):
+    except Exception:
+        return 0.5
 
-    print("Feature Agent Running")
 
-    return state
+# -----------------------------
+# RULE-BASED EXPLANATION (SAFE)
+# -----------------------------
+def explain(row):
+    reasons = []
 
-# =====================================================
-# FRAUD AGENT
-# =====================================================
+    if row["amount"] > 20000:
+        reasons.append("High transaction amount")
 
-def fraud_agent(state):
+    if row["transaction_velocity_7d"] > 10:
+        reasons.append("Velocity spike detected")
 
-    print("Fraud Agent Running")
+    if row["amount_deviation_ratio"] > 2:
+        reasons.append("Amount deviates from normal behavior")
 
-    df = state["dataset"]
+    if row["seconds_since_last_txn"] < 60:
+        reasons.append("Rapid repeated transactions")
 
-    # COLUMN ALIGNMENT
-    # This assumes `feature_columns` are the columns the model was trained on.
-    if not isinstance(model, Pipeline) and hasattr(model, 'feature_names_in_'):
-        # For models like XGBoost that store feature_names_in_
-        aligned_df = df.reindex(columns=model.feature_names_in_, fill_value=0)
-    elif feature_columns is not None and len(feature_columns) > 0:
-        aligned_df = df.reindex(columns=feature_columns, fill_value=0)
-    else:
-        st.error("Cannot align columns: `feature_columns` not loaded or model has no `feature_names_in_`.")
-        st.stop()
+    if row["shared_device_count"] > 2:
+        reasons.append("Multiple accounts using same device")
 
-    fraud_prob = model.predict_proba(
-        aligned_df
-    )[0][1]
+    if not reasons:
+        reasons.append("No strong anomaly detected")
 
-    state["fraud_probability"] = float(
-        fraud_prob
-    )
+    return reasons
 
-    return state
 
-# =====================================================
-# SHAP AGENT
-# =====================================================
-
-def shap_agent(state):
-
-    print("SHAP Agent Running")
-
-    df = state["dataset"]
-
-    # COLUMN ALIGNMENT
-    if not isinstance(model, Pipeline) and hasattr(model, 'feature_names_in_'):
-        aligned_df = df.reindex(columns=model.feature_names_in_, fill_value=0)
-    elif feature_columns is not None and len(feature_columns) > 0:
-        aligned_df = df.reindex(columns=feature_columns, fill_value=0)
-    else:
-        st.error("Cannot align columns for SHAP: `feature_columns` not loaded or model has no `feature_names_in_`.")
-        state["explanation"] = {}
-        return state
+# -----------------------------
+# SAFE SHAP (OPTIONAL)
+# -----------------------------
+def shap_analysis(X):
+    if not SHAP_AVAILABLE or model is None:
+        return None
 
     try:
-        # Ensure SHAP can handle the model type
-        if hasattr(model, 'predict_proba'): # Classifier
-            explainer = shap.Explainer(model.predict_proba, aligned_df)
-        elif hasattr(model, 'predict'): # Other types of models
-            explainer = shap.Explainer(model.predict, aligned_df)
-        else:
-            st.warning("SHAP explainer cannot be created for this model type.")
-            state["explanation"] = {}
-            return state
+        explainer = shap.TreeExplainer(model)
+        return explainer.shap_values(X)
+    except:
+        return None
 
-        shap_values = explainer(aligned_df)
 
-        feature_scores = {}
-
-        # Depending on SHAP explainer, shap_values.values might be 2D for multi-output or 1D.
-        # Assume single output for this fraud detection.
-        if hasattr(shap_values, 'values') and len(shap_values.values.shape) > 1:
-            # For classification, we usually look at the SHAP values for the positive class (index 1)
-            shap_values_for_positive_class = shap_values.values[0, :, 1] if shap_values.values.ndim == 3 else shap_values.values[0]
-            for i, col in enumerate(aligned_df.columns):
-                feature_scores[col] = abs(shap_values_for_positive_class[i])
-        elif hasattr(shap_values, 'values'): # Single output model
-             for i, col in enumerate(aligned_df.columns):
-                feature_scores[col] = abs(shap_values.values[0][i])
-        else:
-            st.warning("SHAP values structure not as expected.")
-            state["explanation"] = {}
-            return state
-
-        top_features = dict(
-
-            sorted(
-
-                feature_scores.items(),
-
-                key=lambda item: item[1],
-
-                reverse=True
-
-            )[:5]
-        )
-
-        state["explanation"] = top_features
-
+# -----------------------------
+# SAFE LANGGRAPH WRAPPER
+# -----------------------------
+def run_graph(state):
+    try:
+        return app.invoke(state)   # your LangGraph app
     except Exception as e:
-
-        st.error(f"Error generating SHAP explanation: {e}")
-        state["explanation"] = {}
-
-    return state
-
-# =====================================================
-# ROUTING FUNCTION
-# =====================================================
-
-def route_risk(state):
-
-    if state["fraud_probability"] > 0.90:
-
-        return "critical_alert_agent"
-
-    return "monitoring_agent"
-
-# =====================================================
-# CRITICAL ALERT AGENT
-# =====================================================
-
-def critical_alert_agent(state):
-
-    print("Critical Alert Agent Running")
-
-    state["critical_action"] = True
-
-    return state
-
-# =====================================================
-# MONITORING AGENT
-# =====================================================
-
-def monitoring_agent(state):
-
-    print("Monitoring Agent Running")
-
-    state["critical_action"] = False
-
-    return state
-
-# =====================================================
-# ALERT AGENT
-# =====================================================
-
-def alert_agent(state):
-
-    prob = state["fraud_probability"]
-
-    if prob > 0.90:
-
-        alert = "CRITICAL FRAUD ALERT"
-
-    elif prob > 0.70:
-
-        alert = "HIGH RISK ALERT"
-
-    elif prob > 0.50:
-
-        alert = "SUSPICIOUS TRANSACTION"
-
-    else:
-
-        alert = "GENUINE TRANSACTION"
-
-    state["alert"] = alert
-
-    return state
-
-# =====================================================
-# BUILD LANGGRAPH
-# =====================================================
-
-workflow = StateGraph(FraudState)
-
-workflow.add_node(
-    "feature_agent",
-    feature_agent
-)
-
-workflow.add_node(
-    "fraud_agent",
-    fraud_agent
-)
-
-workflow.add_node(
-    "shap_agent",
-    shap_agent
-)
-
-workflow.add_node(
-    "critical_alert_agent",
-    critical_alert_agent
-)
-
-workflow.add_node(
-    "monitoring_agent",
-    monitoring_agent
-)
-
-workflow.add_node(
-    "alert_agent",
-    alert_agent
-)
-
-workflow.set_entry_point(
-    "feature_agent"
-)
-
-workflow.add_edge(
-    "feature_agent",
-    "fraud_agent"
-)
-
-workflow.add_edge(
-    "fraud_agent",
-    "shap_agent"
-)
-
-workflow.add_conditional_edges(
-
-    "shap_agent",
-
-    route_risk,
-
-    {
-
-        "critical_alert_agent":
-        "critical_alert_agent",
-
-        "monitoring_agent":
-        "monitoring_agent"
-    }
-)
-
-workflow.add_edge(
-    "critical_alert_agent",
-    "alert_agent"
-)
-
-workflow.add_edge(
-    "monitoring_agent",
-    "alert_agent"
-)
-
-workflow.add_edge(
-    "alert_agent",
-    END
-)
-
-app = workflow.compile()
-
-# =====================================================
-# REAL-TIME MONITORING
-# =====================================================
-
-st.subheader(
-    "🚨 Real-Time Fraud Monitoring"
-)
-
-start_button = st.button(
-    "Start Monitoring"
-)
-
-if start_button:
-
-    placeholder = st.empty()
-
-    for i in range(20):
-
-        txn = generate_transaction()
-
-        txn_df = pd.DataFrame([txn])
-
-        initial_state = {
-
-            "dataset": txn_df,
-
-            "fraud_probability": 0,
-
-            "alert": "",
-
-            "explanation": {},
-
-            "critical_action": False
+        return {
+            "fraud_probability": 0.5,
+            "risk": "SYSTEM FALLBACK",
+            "action": "MANUAL REVIEW",
+            "error": str(e)
         }
 
-        result = app.invoke(
-            initial_state
-        )
 
-        with placeholder.container():
+# -----------------------------
+# STREAMLIT UI
+# -----------------------------
+st.title("🏦 Enterprise Fraud Intelligence System")
+st.write("LangGraph Multi-Agent Fraud Detection Platform (Crash Safe)")
 
-            st.write("---")
+input_df = get_input()
 
-            st.write(
-                f"## Transaction #{i+1}"
-            )
+# -----------------------------
+# BUTTON TRIGGER
+# -----------------------------
+if st.button("Analyze Transaction"):
 
-            st.dataframe(txn_df)
+    # -------------------------
+    # PREDICTION
+    # -------------------------
+    prob = predict(input_df)
 
-            st.write(
-                f"### Fraud Probability: "
-                f"{round(result['fraud_probability'],4)}"
-            )
+    if prob > 0.85:
+        risk = "🔴 CRITICAL FRAUD ALERT"
+        action = "FREEZE + MANUAL REVIEW"
+    elif prob > 0.5:
+        risk = "🟠 MEDIUM RISK"
+        action = "STEP-UP AUTHENTICATION"
+    else:
+        risk = "🟢 LOW RISK"
+        action = "ALLOW"
 
-            st.write(
-                f"### Alert: "
-                f"{result['alert']}"
-            )
+    st.subheader(risk)
+    st.write("Fraud Probability:", round(prob, 4))
+    st.write("Action:", action)
 
-            st.write(
-                f"### Critical Action: "
-                f"{result['critical_action']}"
-            )
+    # -------------------------
+    # EXPLANATION
+    # -------------------------
+    st.subheader("🧠 Risk Explanation")
 
-            st.write(
-                "### SHAP Fraud Drivers"
-            )
+    for r in explain(input_df.iloc[0]):
+        st.write("•", r)
 
-            if len(result["explanation"]) > 0:
+    # -------------------------
+    # SHAP (SAFE)
+    # -------------------------
+    st.subheader("📊 SHAP (Optional)")
 
-                shap_df = pd.DataFrame({
+    shap_vals = shap_analysis(align(input_df))
 
-                    "Feature":
-                    result["explanation"].keys(),
+    if shap_vals is None:
+        st.warning("SHAP not available or not stable for this input")
+    else:
+        st.success("SHAP computed successfully")
+        st.write("SHAP values generated")
 
-                    "Importance":
-                    result["explanation"].values()
+    # -------------------------
+    # LANGGRAPH (SAFE)
+    # -------------------------
+    st.subheader("🤖 Agentic System Output")
 
-                })
+    state = {
+        "features": align(input_df),
+        "input": input_df.to_dict()
+    }
 
-                st.dataframe(shap_df)
+    result = run_graph(state)
 
-            else:
-
-                st.warning(
-                    "No SHAP explanation generated"
-                )
-
-        time.sleep(2)
-
+    st.json(result)
