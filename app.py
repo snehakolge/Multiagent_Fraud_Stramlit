@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
+import time
 import joblib
+import os
 
 from langgraph.graph import StateGraph, END
 
@@ -30,46 +31,40 @@ if os.path.exists(MODEL_PATH):
 
 
 # =========================================================
-# 🧠 1. FRAUD MODEL AGENT (REAL ML)
+# 🧠 FRAUD AGENT (ML SIGNAL)
 # =========================================================
 def fraud_agent(state):
-    try:
-        if model is None:
-            state["fraud_probability"] = 0.5
-            return state
-
+    if model:
         df = pd.DataFrame([{
-            "amount": state.get("amount", 0),
-            "transaction_velocity_7d": state.get("velocity", 0),
-            "avg_amount_30d": state.get("avg_amount_30d", 0),
-            "amount_deviation_ratio": state.get("amount_deviation_ratio", 0),
-            "seconds_since_last_txn": state.get("seconds_since_last_txn", 0),
-            "shared_device_count": state.get("shared_device_count", 0)
+            "amount": state["amount"],
+            "transaction_velocity_7d": state["velocity"],
+            "avg_amount_30d": state["avg_amount_30d"],
+            "amount_deviation_ratio": state["amount_deviation_ratio"],
+            "seconds_since_last_txn": state["seconds_since_last_txn"],
+            "shared_device_count": state["shared_device_count"]
         }])
 
         prob = model.predict_proba(df)[0][1]
         state["fraud_probability"] = float(prob)
+    else:
+        state["fraud_probability"] = min(1.0, state["amount"] / 100000)
 
-        return state
-
-    except:
-        state["fraud_probability"] = 0.5
-        return state
+    return state
 
 
 # =========================================================
-# 🧠 2. SIGNAL AGENT (BEHAVIOR PATTERNS)
+# 🧠 BEHAVIOR AGENT
 # =========================================================
 def behavior_agent(state):
     flags = []
 
-    if state.get("amount", 0) > 20000:
+    if state["amount"] > 20000:
         flags.append("HIGH_AMOUNT")
 
-    if state.get("velocity", 0) > 10:
+    if state["velocity"] > 10:
         flags.append("VELOCITY_SPIKE")
 
-    if state.get("shared_device_count", 0) > 2:
+    if state["shared_device_count"] > 2:
         flags.append("DEVICE_SHARING")
 
     state["risk_flags"] = flags
@@ -77,55 +72,54 @@ def behavior_agent(state):
 
 
 # =========================================================
-# 🧠 3. RISK SCORING AGENT (IMPORTANT - MAKES IT “EMERGENT”)
+# 🧠 SCORING AGENT
 # =========================================================
 def scoring_agent(state):
-    prob = state.get("fraud_probability", 0)
-    flags = state.get("risk_flags", [])
-
-    score = prob + (0.08 * len(flags))
-
+    score = state["fraud_probability"] + 0.1 * len(state["risk_flags"])
     state["risk_score"] = min(score, 1.0)
     return state
 
 
 # =========================================================
-# 🚨 4. ALERT AGENT (AUTO GENERATION)
+# 🚨 ALERT AGENT (AUTOMATIC DECISION ENGINE)
 # =========================================================
 def alert_agent(state):
-    score = state.get("risk_score", 0)
+    score = state["risk_score"]
 
     if score >= 0.75:
-        state["alert"] = "🚨 CRITICAL FRAUD ALERT"
-        state["risk_level"] = "CRITICAL"
+        state["alert"] = "🚨 FRAUD ALERT - AUTO FREEZE TRIGGERED"
+        state["action"] = "FREEZE_ACCOUNT"
+        state["severity"] = "CRITICAL"
 
     elif score >= 0.5:
-        state["alert"] = "⚠️ SUSPICIOUS TRANSACTION"
-        state["risk_level"] = "MEDIUM"
+        state["alert"] = "⚠️ SUSPICIOUS ACTIVITY DETECTED"
+        state["action"] = "STEP_UP_AUTH"
+        state["severity"] = "MEDIUM"
 
     else:
         state["alert"] = "✅ NORMAL TRANSACTION"
-        state["risk_level"] = "LOW"
+        state["action"] = "ALLOW"
+        state["severity"] = "LOW"
 
     return state
 
 
 # =========================================================
-# 🕵️ 5. SHAP EXPLAINER (SAFE)
+# 🕵️ SHAP EXPLAINER (SAFE)
 # =========================================================
 def shap_agent(state):
     try:
-        if model is None or not SHAP_AVAILABLE:
+        if not model or not SHAP_AVAILABLE:
             state["shap"] = ["SHAP not available"]
             return state
 
         df = pd.DataFrame([{
-            "amount": state.get("amount", 0),
-            "transaction_velocity_7d": state.get("velocity", 0),
-            "avg_amount_30d": state.get("avg_amount_30d", 0),
-            "amount_deviation_ratio": state.get("amount_deviation_ratio", 0),
-            "seconds_since_last_txn": state.get("seconds_since_last_txn", 0),
-            "shared_device_count": state.get("shared_device_count", 0)
+            "amount": state["amount"],
+            "transaction_velocity_7d": state["velocity"],
+            "avg_amount_30d": state["avg_amount_30d"],
+            "amount_deviation_ratio": state["amount_deviation_ratio"],
+            "seconds_since_last_txn": state["seconds_since_last_txn"],
+            "shared_device_count": state["shared_device_count"]
         }])
 
         explainer = shap.TreeExplainer(model)
@@ -133,39 +127,36 @@ def shap_agent(state):
 
         impacts = dict(zip(df.columns, shap_values[0]))
 
-        top_features = sorted(
+        state["shap"] = sorted(
             impacts.items(),
             key=lambda x: abs(x[1]),
             reverse=True
         )[:3]
 
-        state["shap"] = top_features
-
-        return state
-
     except:
         state["shap"] = ["SHAP error"]
-        return state
-
-
-# =========================================================
-# 🧠 6. FINAL DECISION AGENT (REAL BRAIN)
-# =========================================================
-def final_agent(state):
-    score = state.get("risk_score", 0)
-
-    if score >= 0.75:
-        state["decision"] = "FREEZE ACCOUNT + AML ALERT"
-    elif score >= 0.5:
-        state["decision"] = "STEP-UP AUTHENTICATION"
-    else:
-        state["decision"] = "ALLOW TRANSACTION"
 
     return state
 
 
 # =========================================================
-# 🔗 LANGGRAPH FLOW
+# FINAL AGENT (CASE CREATION)
+# =========================================================
+def case_agent(state):
+    state["case_id"] = f"CASE-{int(time.time())}"
+
+    if state["risk_score"] >= 0.75:
+        state["case_status"] = "OPEN - CRITICAL"
+    elif state["risk_score"] >= 0.5:
+        state["case_status"] = "OPEN - REVIEW"
+    else:
+        state["case_status"] = "CLOSED - SAFE"
+
+    return state
+
+
+# =========================================================
+# LANGGRAPH PIPELINE
 # =========================================================
 def build_graph():
     builder = StateGraph(dict)
@@ -175,7 +166,7 @@ def build_graph():
     builder.add_node("scoring_agent", scoring_agent)
     builder.add_node("alert_agent", alert_agent)
     builder.add_node("shap_agent", shap_agent)
-    builder.add_node("final_agent", final_agent)
+    builder.add_node("case_agent", case_agent)
 
     builder.set_entry_point("fraud_agent")
 
@@ -183,8 +174,8 @@ def build_graph():
     builder.add_edge("behavior_agent", "scoring_agent")
     builder.add_edge("scoring_agent", "alert_agent")
     builder.add_edge("alert_agent", "shap_agent")
-    builder.add_edge("shap_agent", "final_agent")
-    builder.add_edge("final_agent", END)
+    builder.add_edge("shap_agent", "case_agent")
+    builder.add_edge("case_agent", END)
 
     return builder.compile()
 
@@ -193,58 +184,75 @@ app = build_graph()
 
 
 # =========================================================
-# 🧾 STREAMLIT UI
+# 🏦 STREAMLIT CONTROL TOWER UI
 # =========================================================
-st.title("🏦 Enterprise Fraud Intelligence System")
-st.write("Agentic ML + SHAP + Automated Fraud Alerts")
+st.title("🏦 Fraud Control Tower - Real Time System")
+st.write("🔥 Always-On Agentic Fraud Monitoring System")
 
 amount = st.number_input("Amount", 100, 100000, 5000)
-velocity = st.slider("Velocity (7d)", 1, 50, 5)
-avg_amount = st.number_input("Avg Amount (30d)", 100, 100000, 4500)
+velocity = st.slider("Velocity", 1, 50, 5)
+avg_amount = st.number_input("Avg Amount", 100, 100000, 4500)
 deviation = st.slider("Deviation Ratio", 0.1, 5.0, 1.0)
-seconds = st.slider("Seconds since last txn", 10, 10000, 500)
+seconds = st.slider("Seconds Since Last Txn", 10, 10000, 500)
 device = st.slider("Shared Device Count", 0, 10, 0)
 
 
 # =========================================================
-# 🚀 RUN SYSTEM
+# 🔄 AUTO MONITORING MODE (KEY FEATURE)
 # =========================================================
-if st.button("Analyze Transaction"):
+st.subheader("🔄 Real-Time Monitoring Mode")
 
-    state = {
-        "amount": amount,
-        "velocity": velocity,
-        "avg_amount_30d": avg_amount,
-        "amount_deviation_ratio": deviation,
-        "seconds_since_last_txn": seconds,
-        "shared_device_count": device
-    }
+run_stream = st.checkbox("Enable Live Monitoring Simulation")
 
-    try:
-        result = app.invoke(state)
+if run_stream:
 
-    except Exception as e:
-        result = {
-            "fraud_probability": 0.5,
-            "risk_level": "SYSTEM FALLBACK",
-            "alert": "ERROR",
-            "decision": "MANUAL REVIEW",
-            "error": str(e)
+    placeholder = st.empty()
+
+    for i in range(3):  # simulate stream batches
+
+        state = {
+            "amount": np.random.randint(1000, 50000),
+            "velocity": np.random.randint(1, 30),
+            "avg_amount_30d": 4500,
+            "amount_deviation_ratio": np.random.random() * 3,
+            "seconds_since_last_txn": np.random.randint(10, 1000),
+            "shared_device_count": np.random.randint(0, 5)
         }
 
-    # -----------------------------
-    # OUTPUT
-    # -----------------------------
-    st.subheader("🧠 Final Output")
+        result = app.invoke(state)
 
-    st.write("Fraud Probability:", result.get("fraud_probability"))
-    st.write("Risk Score:", result.get("risk_score"))
-    st.write("Risk Level:", result.get("risk_level"))
-    st.write("Alert:", result.get("alert"))
-    st.write("Decision:", result.get("decision"))
+        with placeholder.container():
 
-    st.subheader("🚨 Risk Flags")
-    st.write(result.get("risk_flags", []))
+            st.markdown("## 🚨 LIVE TRANSACTION ANALYSIS")
 
-    st.subheader("🕵️ SHAP Explanation")
-    st.write(result.get("shap"))
+            st.write("Amount:", result["amount"])
+            st.write("Fraud Probability:", result["fraud_probability"])
+            st.write("Risk Score:", result["risk_score"])
+            st.write("Alert:", result["alert"])
+            st.write("Action:", result["action"])
+            st.write("Case ID:", result["case_id"])
+            st.write("Case Status:", result["case_status"])
+
+            st.write("Risk Flags:", result["risk_flags"])
+            st.write("SHAP:", result["shap"])
+
+        time.sleep(2)
+
+else:
+
+    if st.button("Analyze Single Transaction"):
+
+        state = {
+            "amount": amount,
+            "velocity": velocity,
+            "avg_amount_30d": avg_amount,
+            "amount_deviation_ratio": deviation,
+            "seconds_since_last_txn": seconds,
+            "shared_device_count": device
+        }
+
+        result = app.invoke(state)
+
+        st.subheader("🧠 FINAL OUTPUT")
+
+        st.write(result)
