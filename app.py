@@ -1,136 +1,165 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
+import random
+import uuid
 import time
-import joblib
-import os
 
-from langgraph.graph import StateGraph, END
+# ---------------------------
+# 🟢 AGENT 1: Velocity Agent
+# ---------------------------
+def velocity_agent(txn):
+    velocity = txn["velocity_7d"]
 
-# -------------------------
-# MODEL
-# -------------------------
-model = None
-if os.path.exists("efrms_xgboost_model.pkl"):
-    model = joblib.load("efrms_xgboost_model.pkl")
-
-
-# =========================
-# 🧠 FRAUD AGENT
-# =========================
-def fraud_agent(state):
-    if model:
-        df = pd.DataFrame([state])
-        state["ml_score"] = float(model.predict_proba(df)[0][1])
+    if velocity > 40:
+        return "CRITICAL", "Extreme transaction burst detected"
+    elif velocity > 20:
+        return "SUSPICIOUS", "Unusual spike in transaction frequency"
     else:
-        state["ml_score"] = state["amount"] / 100000
-    return state
+        return "NORMAL", "Velocity within normal range"
 
 
-# =========================
-# 🧠 BEHAVIOR AGENT
-# =========================
-def behavior_agent(state):
-    flags = []
+# ---------------------------
+# 🟡 AGENT 2: Pattern Agent
+# ---------------------------
+def pattern_agent(txn):
+    deviation = txn["amount_deviation"]
 
-    if state["amount"] > 20000:
-        flags.append("HIGH_AMOUNT")
-    if state["velocity"] > 10:
-        flags.append("VELOCITY_SPIKE")
-    if state["shared_device_count"] > 2:
-        flags.append("DEVICE_SHARING")
-
-    state["flags"] = flags
-    state["behavior_score"] = len(flags) * 0.25
-    return state
+    if deviation > 3:
+        return "SUSPICIOUS", "Amount significantly deviates from user behavior"
+    elif deviation > 1.5:
+        return "WATCHLIST", "Moderate deviation detected"
+    else:
+        return "NORMAL", "Spending pattern stable"
 
 
-# =========================
-# 🧠 SCORING
-# =========================
-def scoring_agent(state):
-    state["risk_score"] = min(
-        state["ml_score"] + state["behavior_score"],
-        1.0
+# ---------------------------
+# 🔵 AGENT 3: ML MODEL AGENT
+# ---------------------------
+def ml_agent(txn):
+    score = txn["ml_score"]
+
+    if score > 0.8:
+        return "HIGH_RISK", score
+    elif score > 0.4:
+        return "MEDIUM_RISK", score
+    else:
+        return "LOW_RISK", score
+
+
+# ---------------------------
+# 🟣 AGENT 4: RBI / RULE ENGINE
+# ---------------------------
+def rbi_agent(txn):
+    flags = txn["flags"]
+
+    if "VELOCITY_SPIKE" in flags and txn["amount"] > 10000:
+        return "HIGH_RISK_RULE", "RBI EWS: velocity + high value transaction"
+    elif "MANY_FAILED_TXNS" in flags:
+        return "MEDIUM_RISK_RULE", "Multiple failed attempts detected"
+    else:
+        return "CLEAR", "No regulatory violation detected"
+
+
+# ---------------------------
+# 🧠 ORCHESTRATOR (Decision Brain)
+# ---------------------------
+def orchestrator(v, p, m, r):
+    
+    risk_score = 0
+    reasons = []
+
+    # Velocity contribution
+    if v[0] == "CRITICAL":
+        risk_score += 40
+    elif v[0] == "SUSPICIOUS":
+        risk_score += 25
+
+    # Pattern contribution
+    if p[0] == "SUSPICIOUS":
+        risk_score += 20
+    elif p[0] == "WATCHLIST":
+        risk_score += 10
+
+    # ML contribution
+    if m[0] == "HIGH_RISK":
+        risk_score += 40
+    elif m[0] == "MEDIUM_RISK":
+        risk_score += 20
+
+    # RBI rules (VERY HIGH IMPACT)
+    if r[0] == "HIGH_RISK_RULE":
+        risk_score += 50
+    elif r[0] == "MEDIUM_RISK_RULE":
+        risk_score += 25
+
+    # Decision logic
+    if risk_score >= 80:
+        decision = "BLOCK & FREEZE"
+    elif risk_score >= 50:
+        decision = "HOLD + MANUAL REVIEW"
+    elif risk_score >= 25:
+        decision = "STEP-UP AUTHENTICATION"
+    else:
+        decision = "ALLOW"
+
+    return risk_score, reasons, decision
+
+
+# ---------------------------
+# 🎛 STREAMLIT UI
+# ---------------------------
+st.title("🏦 Agentic Fraud Control Tower")
+
+st.write("Real-time Multi-Agent Fraud Detection System")
+
+# Simulated transaction
+txn = {
+    "amount": random.randint(1000, 20000),
+    "velocity_7d": random.randint(1, 60),
+    "amount_deviation": random.uniform(0.5, 5),
+    "ml_score": random.random(),
+    "flags": random.choices(
+        ["VELOCITY_SPIKE", "NONE", "FAILED_TXN"], k=1
     )
-    return state
+}
 
+st.subheader("🔄 Live Transaction")
+st.json(txn)
 
-# =========================
-# 🚨 ALERT ENGINE (AUTONOMOUS)
-# =========================
-def alert_agent(state):
+# Run Agents
+v = velocity_agent(txn)
+p = pattern_agent(txn)
+m = ml_agent(txn)
+r = rbi_agent(txn)
 
-    if state["risk_score"] > 0.75:
-        state["alert"] = "🚨 FRAUD ALERT AUTO-GENERATED"
-        state["action"] = "FREEZE"
-    elif state["risk_score"] > 0.5:
-        state["alert"] = "⚠️ SUSPICIOUS TRANSACTION AUTO-FLAGGED"
-        state["action"] = "REVIEW"
-    else:
-        state["alert"] = "✅ SAFE"
-        state["action"] = "ALLOW"
+# Orchestrator Decision
+risk_score, reasons, decision = orchestrator(v, p, m, r)
 
-    return state
+# ---------------------------
+# OUTPUT
+# ---------------------------
+st.subheader("🧠 Agent Outputs")
 
+st.write("Velocity Agent:", v)
+st.write("Pattern Agent:", p)
+st.write("ML Agent:", m)
+st.write("RBI Agent:", r)
 
-# =========================
-# GRAPH
-# =========================
-def build_graph():
-    g = StateGraph(dict)
+st.subheader("🚨 Final Decision Engine")
 
-    g.add_node("fraud_agent", fraud_agent)
-    g.add_node("behavior_agent", behavior_agent)
-    g.add_node("scoring_agent", scoring_agent)
-    g.add_node("alert_agent", alert_agent)
+st.metric("Risk Score", risk_score)
+st.success(f"Decision: {decision}")
 
-    g.set_entry_point("fraud_agent")
+# ---------------------------
+# CASE MANAGEMENT
+# ---------------------------
+if decision != "ALLOW":
+    case_id = str(uuid.uuid4())
 
-    g.add_edge("fraud_agent", "behavior_agent")
-    g.add_edge("behavior_agent", "scoring_agent")
-    g.add_edge("scoring_agent", "alert_agent")
-    g.add_edge("alert_agent", END)
+    st.error("🚨 FRAUD CASE GENERATED")
+    st.write("Case ID:", case_id)
+    st.write("Status: OPEN")
+    st.write("Assigned Team: Fraud Ops / AML Team")
 
-    return g.compile()
-
-
-app = build_graph()
-
-
-# =========================
-# UI (NO BUTTON = AUTO SYSTEM)
-# =========================
-st.title("🏦 LIVE Fraud Control Tower (Auto Agent System)")
-st.write("🔄 System continuously monitoring transactions...")
-
-placeholder = st.empty()
-
-# =========================
-# 🔥 CONTINUOUS STREAM LOOP
-# =========================
-for i in range(50):  # simulate live transactions
-
-    state = {
-        "amount": np.random.randint(1000, 50000),
-        "velocity": np.random.randint(1, 30),
-        "avg_amount_30d": 4500,
-        "amount_deviation_ratio": np.random.random() * 3,
-        "seconds_since_last_txn": np.random.randint(10, 1000),
-        "shared_device_count": np.random.randint(0, 5)
-    }
-
-    result = app.invoke(state)
-
-    with placeholder.container():
-
-        st.subheader("🔴 LIVE TRANSACTION FEED")
-
-        st.write("Amount:", result["amount"])
-        st.write("ML Score:", round(result["ml_score"], 3))
-        st.write("Risk Score:", round(result["risk_score"], 3))
-        st.write("Flags:", result["flags"])
-        st.write("Alert:", result["alert"])
-        st.write("Action:", result["action"])
-
-    time.sleep(1)
+# Auto refresh simulation
+time.sleep(2)
+st.rerun()
