@@ -4,10 +4,13 @@ import uuid
 import time
 
 # =========================
-# 🧠 INIT SESSION STATE
+# 🧠 INIT STATE
 # =========================
 if "cases" not in st.session_state:
     st.session_state.cases = []
+
+if "human_queue" not in st.session_state:
+    st.session_state.human_queue = []
 
 if "weights" not in st.session_state:
     st.session_state.weights = {
@@ -16,6 +19,15 @@ if "weights" not in st.session_state:
         "ml": 1.0,
         "rbi": 1.0
     }
+
+
+# =========================
+# 🧠 UTIL: CAP WEIGHTS (IMPORTANT)
+# =========================
+def cap_weights(weights):
+    for k in weights:
+        weights[k] = max(0.5, min(weights[k], 2.0))
+    return weights
 
 
 # =========================
@@ -61,7 +73,7 @@ def ml_agent(txn):
 
 
 # =========================
-# 🟣 RBI RULE AGENT
+# 🟣 RBI AGENT
 # =========================
 def rbi_agent(txn):
     if "VELOCITY_SPIKE" in txn["flags"] and txn["amount"] > 12000:
@@ -73,15 +85,16 @@ def rbi_agent(txn):
 
 
 # =========================
-# 🧠 ORCHESTRATOR (DECISION BRAIN)
+# 🧠 ORCHESTRATOR (DECISION ENGINE)
 # =========================
 def orchestrator(v, p, m, r, weights):
 
     score = 0
+    rbi_override = False
 
-    # 🟣 RBI OVERRIDE (highest priority)
+    # 🟣 RBI override (highest priority)
     if r[0] == "HIGH_RISK_RULE":
-        return 100, "BLOCK & FREEZE"
+        return 100, "BLOCK & FREEZE", True
 
     # weighted scoring
     if v[0] == "CRITICAL":
@@ -102,52 +115,60 @@ def orchestrator(v, p, m, r, weights):
     if r[0] == "MEDIUM_RISK_RULE":
         score += 25 * weights["rbi"]
 
-    # decision
+    # normalize risk score
+    score = min(100, max(0, score))
+
+    # 🧠 DECISION WITH HUMAN-IN-THE-LOOP
     if score >= 80:
-        return score, "BLOCK & FREEZE"
-    elif score >= 50:
-        return score, "HOLD + MANUAL REVIEW"
-    elif score >= 25:
-        return score, "STEP-UP AUTH"
+        decision = "BLOCK & FREEZE"
+    elif score >= 60:
+        decision = "HUMAN REVIEW (HITL)"
+    elif score >= 40:
+        decision = "STEP-UP AUTH (OTP)"
     else:
-        return score, "ALLOW"
+        decision = "ALLOW"
+
+    return score, decision, rbi_override
 
 
 # =========================
-# 📊 EXPLAINABILITY (SHAP-LIKE)
+# 📊 EXPLAINABILITY (STABLE SHAP-LIKE)
 # =========================
 def explain(txn):
+
+    total = txn["amount"] + txn["velocity_7d"] + (txn["amount_deviation"] * 100) + (txn["ml_score"] * 100)
+
     return {
-        "amount_impact": random.uniform(0.1, 0.4),
-        "velocity_impact": random.uniform(0.2, 0.6),
-        "deviation_impact": random.uniform(0.1, 0.5),
-        "ml_impact": random.uniform(0.3, 0.7)
+        "amount_impact": txn["amount"] / total,
+        "velocity_impact": txn["velocity_7d"] / total,
+        "deviation_impact": (txn["amount_deviation"] * 100) / total,
+        "ml_impact": txn["ml_score"]
     }
 
 
 # =========================
-# 🔁 LEARNING LOOP
+# 🔁 LEARNING LOOP (CONTROLLED)
 # =========================
 def learning_loop(decision, weights):
 
     if decision == "BLOCK & FREEZE":
-        weights["velocity"] += 0.02
-        weights["ml"] += 0.03
-        weights["rbi"] += 0.02
+        weights["velocity"] += 0.01
+        weights["ml"] += 0.01
+        weights["rbi"] += 0.01
 
     elif decision == "ALLOW":
-        weights["ml"] -= 0.01
+        weights["ml"] -= 0.005
 
-    return weights
+    return cap_weights(weights)
 
 
 # =========================
-# 🎛 UI CONFIG
+# 🎛 STREAMLIT UI
 # =========================
 st.set_page_config(page_title="Fraud SOC", layout="wide")
 
-st.title("🏦 Fraud SOC Control Tower (Agentic AI)")
-st.caption("Multi-Agent + SHAP + Learning Loop + Real-Time Simulation")
+st.title("🏦 Fraud SOC Control Tower (Agentic + HITL + Learning)")
+st.caption("Production-style Fraud Decision System (Explainable + Human-in-loop)")
 
 
 # =========================
@@ -161,7 +182,7 @@ txn = {
     "flags": random.choices(["VELOCITY_SPIKE", "FAILED_TXN", "NONE"], k=1)
 }
 
-st.subheader("🔄 Live Transaction")
+st.subheader("🔄 Live Transaction Feed")
 st.json(txn)
 
 
@@ -173,13 +194,13 @@ p = pattern_agent(txn)
 m = ml_agent(txn)
 r = rbi_agent(txn)
 
-score, decision = orchestrator(v, p, m, r, st.session_state.weights)
+score, decision, _ = orchestrator(v, p, m, r, st.session_state.weights)
 
 shap_vals = explain(txn)
 
 
 # =========================
-# 🧠 AGENT OUTPUTS
+# 🧠 OUTPUT PANEL
 # =========================
 col1, col2 = st.columns(2)
 
@@ -192,12 +213,14 @@ with col1:
 
 with col2:
     st.subheader("🚨 Decision Engine")
-    st.metric("Risk Score", round(score, 2))
+    st.metric("Risk Score", score)
 
     if decision == "ALLOW":
         st.success(decision)
     elif "STEP-UP" in decision:
         st.warning(decision)
+    elif "HUMAN" in decision:
+        st.info(decision)
     else:
         st.error(decision)
 
@@ -205,7 +228,7 @@ with col2:
 # =========================
 # 📊 EXPLAINABILITY
 # =========================
-st.subheader("📊 SHAP-Like Explainability")
+st.subheader("📊 Explainability Layer")
 
 for k, v in shap_vals.items():
     st.write(f"{k}: {v:.3f}")
@@ -218,23 +241,38 @@ if decision != "ALLOW":
 
     case_id = str(uuid.uuid4())
 
-    st.subheader("🚨 FRAUD CASE GENERATED")
-    st.write("Case ID:", case_id)
-    st.write("Status: OPEN")
-    st.write("Team: Fraud Ops / AML")
-
-    st.session_state.cases.append({
+    case = {
         "case_id": case_id,
         "amount": txn["amount"],
-        "risk": score,
+        "risk_score": score,
         "decision": decision
-    })
+    }
+
+    st.session_state.cases.append(case)
+
+    # 🧑 HUMAN LOOP QUEUE
+    if "HUMAN" in decision:
+        st.session_state.human_queue.append(case)
+
+    st.subheader("🚨 Case Generated")
+    st.write(case)
 
 
 # =========================
-# 🧠 MEMORY DASHBOARD
+# 🧑 HUMAN-IN-THE-LOOP QUEUE
 # =========================
-st.subheader("🧠 Case Memory")
+st.subheader("🧑 Human Review Queue")
+
+if st.session_state.human_queue:
+    st.json(st.session_state.human_queue[-5:])
+else:
+    st.info("No cases waiting for human review")
+
+
+# =========================
+# 🧠 CASE MEMORY
+# =========================
+st.subheader("🧠 Case Memory (Recent)")
 st.json(st.session_state.cases[-5:])
 
 
@@ -243,7 +281,7 @@ st.json(st.session_state.cases[-5:])
 # =========================
 st.session_state.weights = learning_loop(decision, st.session_state.weights)
 
-st.subheader("🧠 Learning Weights")
+st.subheader("🧠 Adaptive Learning Weights")
 st.json(st.session_state.weights)
 
 
