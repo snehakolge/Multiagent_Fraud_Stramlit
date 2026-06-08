@@ -46,7 +46,7 @@ FEATURES = [
 
 
 # =========================================================
-# 🧠 AGENTS (CORE LOGIC)
+# 🧠 AGENTS
 # =========================================================
 
 # 1️⃣ FRAUD DETECTION AGENT
@@ -67,7 +67,7 @@ def fraud_agent(state):
         return state
 
 
-# 2️⃣ BEHAVIOR ANALYSIS AGENT
+# 2️⃣ BEHAVIOR AGENT
 def behavior_agent(state):
     try:
         flags = []
@@ -89,7 +89,42 @@ def behavior_agent(state):
         return state
 
 
-# 3️⃣ INVESTIGATION AGENT (🔥 THIS MAKES IT AGENTIC)
+# 3️⃣ 🧠 REASONING AGENT (THIS MAKES IT AGENTIC)
+def reasoning_agent(state):
+    try:
+        prob = state.get("fraud_probability", 0)
+        flags = state.get("risk_flags", [])
+
+        reasoning = []
+
+        if prob > 0.85:
+            reasoning.append("High confidence fraud → immediate escalation")
+
+        elif prob > 0.5 and len(flags) > 0:
+            reasoning.append("Medium risk → investigation required")
+
+        else:
+            reasoning.append("Low risk → safe to proceed")
+
+        state["reasoning"] = reasoning
+
+        # 🔥 DYNAMIC DECISION MAKING (CORE AGENTIC FEATURE)
+        if prob > 0.85:
+            state["next_step"] = "decision_agent"
+        elif len(flags) > 0:
+            state["next_step"] = "investigator_agent"
+        else:
+            state["next_step"] = "decision_agent"
+
+        return state
+
+    except:
+        state["reasoning"] = ["Fallback reasoning"]
+        state["next_step"] = "decision_agent"
+        return state
+
+
+# 4️⃣ INVESTIGATION AGENT
 def investigator_agent(state):
     try:
         prob = state.get("fraud_probability", 0)
@@ -98,13 +133,13 @@ def investigator_agent(state):
         plan = []
 
         if prob > 0.7:
-            plan.append("Deep transaction history analysis required")
+            plan.append("Deep transaction history check")
 
         if "VELOCITY_SPIKE" in flags:
             plan.append("Analyze last 50 transactions")
 
         if "DEVICE_SHARING" in flags:
-            plan.append("Perform device graph mapping")
+            plan.append("Cross-device mapping required")
 
         state["investigation_plan"] = plan
 
@@ -115,7 +150,7 @@ def investigator_agent(state):
         return state
 
 
-# 4️⃣ COMPLIANCE AGENT (RBI/EWS)
+# 5️⃣ COMPLIANCE AGENT (RBI / EWS)
 def compliance_agent(state):
     try:
         prob = state.get("fraud_probability", 0)
@@ -133,7 +168,7 @@ def compliance_agent(state):
         return state
 
 
-# 5️⃣ DECISION AGENT
+# 6️⃣ DECISION AGENT
 def decision_agent(state):
     try:
         prob = state.get("fraud_probability", 0)
@@ -160,7 +195,7 @@ def decision_agent(state):
 
 
 # =========================================================
-# 🔗 LANGGRAPH BUILD (TRUE AGENTIC FLOW)
+# 🔗 LANGGRAPH (REAL AGENTIC FLOW)
 # =========================================================
 from langgraph.graph import StateGraph
 
@@ -169,6 +204,7 @@ def build_graph():
 
     builder.add_node("fraud_agent", fraud_agent)
     builder.add_node("behavior_agent", behavior_agent)
+    builder.add_node("reasoning_agent", reasoning_agent)
     builder.add_node("investigator_agent", investigator_agent)
     builder.add_node("compliance_agent", compliance_agent)
     builder.add_node("decision_agent", decision_agent)
@@ -177,21 +213,18 @@ def build_graph():
 
     builder.add_edge("fraud_agent", "behavior_agent")
 
+    builder.add_edge("behavior_agent", "reasoning_agent")
 
-    # 🔥 CONDITIONAL ROUTING (KEY AGENTIC FEATURE)
+    # 🔥 REAL AGENTIC ROUTING
     def route(state):
-        if state.get("fraud_probability", 0) > 0.7:
-            return "investigator_agent"
-        else:
-            return "compliance_agent"
-
+        return state.get("next_step", "decision_agent")
 
     builder.add_conditional_edges(
-        "behavior_agent",
+        "reasoning_agent",
         route,
         {
             "investigator_agent": "investigator_agent",
-            "compliance_agent": "compliance_agent"
+            "decision_agent": "decision_agent"
         }
     )
 
@@ -208,8 +241,7 @@ app = build_graph()
 # 🧾 STREAMLIT UI
 # =========================================================
 st.title("🏦 Enterprise Fraud Intelligence System")
-st.write("🔥 True LangGraph Multi-Agent Fraud Detection System")
-
+st.write("🔥 REAL Agentic LangGraph Fraud System (Dynamic Reasoning)")
 
 amount = st.number_input("Amount", 100, 100000, 5000)
 velocity = st.slider("Velocity (7d)", 1, 50, 5)
@@ -220,9 +252,9 @@ device = st.slider("Shared Device Count", 0, 10, 0)
 
 
 # =========================================================
-# 🚀 RUN AGENTIC SYSTEM
+# 🚀 RUN SYSTEM
 # =========================================================
-if st.button("Run Fraud Investigation"):
+if st.button("Run Agentic Fraud Analysis"):
 
     state = {
         "amount": amount,
@@ -257,12 +289,15 @@ if st.button("Run Fraud Investigation"):
     st.subheader("🚨 Risk Flags")
     st.write(result.get("risk_flags", []))
 
-    st.subheader("🕵️ Investigation Plan (AGENT OUTPUT)")
+    st.subheader("🧠 Agent Reasoning")
+    st.write(result.get("reasoning", []))
+
+    st.subheader("🕵️ Investigation Plan")
     st.write(result.get("investigation_plan", []))
 
 
     # -----------------------------
-    # EXPLANATION LAYER
+    # EXPLANATION ENGINE
     # -----------------------------
     st.subheader("📌 Explanation Engine")
 
@@ -275,7 +310,7 @@ if st.button("Run Fraud Investigation"):
         explanations.append("Velocity spike detected")
 
     if device > 2:
-        explanations.append("Multiple device linkage")
+        explanations.append("Device sharing anomaly")
 
     if len(explanations) == 0:
         explanations.append("No anomalies detected")
@@ -285,11 +320,11 @@ if st.button("Run Fraud Investigation"):
 
 
     # -----------------------------
-    # SHAP (OPTIONAL SAFE)
+    # SHAP (SAFE OPTIONAL)
     # -----------------------------
     st.subheader("📊 SHAP Analysis")
 
     if not SHAP_AVAILABLE or model is None:
         st.warning("SHAP not available or model not loaded")
     else:
-        st.success("SHAP ready (optional mode)")
+        st.success("SHAP ready (optional advanced mode)")
