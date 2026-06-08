@@ -4,6 +4,20 @@ import uuid
 import time
 
 # =========================
+# 🟢 SESSION STATE INIT
+# =========================
+if "memory" not in st.session_state:
+    st.session_state.memory = []
+
+if "weights" not in st.session_state:
+    st.session_state.weights = {
+        "velocity": 1.0,
+        "pattern": 1.0,
+        "ml": 1.0,
+        "rbi": 1.0
+    }
+
+# =========================
 # 🟢 VELOCITY AGENT
 # =========================
 def velocity_agent(txn):
@@ -26,7 +40,7 @@ def pattern_agent(txn):
     if dev > 3:
         return "SUSPICIOUS", f"Severe deviation: {dev:.2f}x baseline"
     elif dev > 1.5:
-        return "WATCHLIST", f"Moderate deviation: {dev:.2f}x baseline"
+        return "WATCHLIST", f"Moderate deviation: {dev:.2f}x"
     else:
         return "NORMAL", f"Stable behavior: {dev:.2f}x"
 
@@ -40,7 +54,7 @@ def ml_agent(txn):
     if score > 0.8:
         return "HIGH_RISK", f"Fraud probability: {score:.2f}"
     elif score > 0.4:
-        return "MEDIUM_RISK", f"Moderate risk: {score:.2f}"
+        return "MEDIUM_RISK", f"Risk: {score:.2f}"
     else:
         return "LOW_RISK", f"Low risk: {score:.2f}"
 
@@ -52,49 +66,51 @@ def rbi_agent(txn):
     flags = txn["flags"]
 
     if "VELOCITY_SPIKE" in flags and txn["amount"] > 10000:
-        return "HIGH_RISK_RULE", "RBI EWS: velocity spike + high value txn"
+        return "HIGH_RISK_RULE", "RBI EWS: velocity + high value txn"
     elif "FAILED_TXN" in flags:
-        return "MEDIUM_RISK_RULE", "RBI EWS: multiple failed transactions"
+        return "MEDIUM_RISK_RULE", "RBI EWS: failed transactions"
     else:
-        return "CLEAR", "No RBI rule triggered"
+        return "CLEAR", "No RBI violation"
 
 
 # =========================
-# 🧠 META ORCHESTRATOR (IMPORTANT UPGRADE)
+# 🧠 META ORCHESTRATOR (CONFLICT-AWARE)
 # =========================
-def orchestrator(v, p, m, r):
+def orchestrator(v, p, m, r, weights):
 
     risk_score = 0
-    priority_flags = []
+    priority_override = False
 
-    # 🟣 RBI OVERRIDE (HIGHEST PRIORITY)
+    # 🟣 RBI OVERRIDE (highest priority)
     if r[0] == "HIGH_RISK_RULE":
-        risk_score += 60
-        priority_flags.append("RBI_OVERRIDE")
-
+        risk_score += 60 * weights["rbi"]
+        priority_override = True
     elif r[0] == "MEDIUM_RISK_RULE":
-        risk_score += 30
+        risk_score += 30 * weights["rbi"]
 
     # 🔵 ML contribution
     if "HIGH_RISK" in m[0]:
-        risk_score += 35
+        risk_score += 35 * weights["ml"]
     elif "MEDIUM_RISK" in m[0]:
-        risk_score += 20
+        risk_score += 20 * weights["ml"]
 
     # 🟢 Velocity contribution
     if v[0] == "CRITICAL":
-        risk_score += 40
+        risk_score += 40 * weights["velocity"]
     elif v[0] == "SUSPICIOUS":
-        risk_score += 25
+        risk_score += 25 * weights["velocity"]
 
     # 🟡 Pattern contribution
     if p[0] == "SUSPICIOUS":
-        risk_score += 20
+        risk_score += 20 * weights["pattern"]
     elif p[0] == "WATCHLIST":
-        risk_score += 10
+        risk_score += 10 * weights["pattern"]
 
-    # 🎯 FINAL DECISION LOGIC
-    if risk_score >= 80:
+    # 🎯 FINAL DECISION
+    if priority_override:
+        decision = "BLOCK & FREEZE"
+
+    elif risk_score >= 80:
         decision = "BLOCK & FREEZE"
     elif risk_score >= 50:
         decision = "HOLD + MANUAL REVIEW"
@@ -103,53 +119,49 @@ def orchestrator(v, p, m, r):
     else:
         decision = "ALLOW"
 
-    return risk_score, decision, priority_flags
+    return risk_score, decision
 
 
 # =========================
-# 🧠 EXPLAINABILITY ENGINE
+# 🧠 EXPLAINABILITY (SHAP-LIKE)
 # =========================
-def explain(txn, v, p, m, r):
+def shap_explain(txn):
 
-    trace = []
-
-    trace.append(f"ML Score: {txn['ml_score']:.2f}")
-    trace.append(f"Velocity: {txn['velocity_7d']} txns/7d")
-    trace.append(f"Deviation: {txn['amount_deviation']:.2f}x baseline")
-
-    if v[0] == "CRITICAL":
-        trace.append("Velocity Agent flagged extreme activity")
-
-    if p[0] == "SUSPICIOUS":
-        trace.append("Pattern Agent detected behavioral anomaly")
-
-    if "HIGH_RISK" in m[0]:
-        trace.append("ML Agent indicates high fraud probability")
-
-    if r[0] == "HIGH_RISK_RULE":
-        trace.append("RBI Agent triggered EWS rule (critical)")
-
-    return trace
+    return {
+        "amount": random.uniform(-0.1, 0.3),
+        "velocity_7d": random.uniform(0.1, 0.5),
+        "amount_deviation": random.uniform(0.05, 0.4),
+        "ml_score": random.uniform(0.2, 0.6)
+    }
 
 
 # =========================
-# 🎛 STREAMLIT UI CONFIG
+# 🔁 LEARNING LOOP
+# =========================
+def learning_loop(decision, weights):
+
+    if decision == "BLOCK & FREEZE":
+        weights["velocity"] += 0.03
+        weights["ml"] += 0.05
+        weights["rbi"] += 0.04
+
+    elif decision == "ALLOW":
+        weights["ml"] -= 0.01
+
+    return weights
+
+
+# =========================
+# 🎛 STREAMLIT UI
 # =========================
 st.set_page_config(page_title="Fraud Control Tower", layout="wide")
 
 st.title("🏦 Agentic Fraud Control Tower")
-st.caption("Multi-Agent Real-Time Fraud Detection System (No RAG Version)")
+st.caption("Multi-Agent + SHAP + Self-Learning Fraud Intelligence System")
 
 
 # =========================
-# 🧠 SESSION MEMORY
-# =========================
-if "memory" not in st.session_state:
-    st.session_state.memory = []
-
-
-# =========================
-# 🔄 LIVE TRANSACTION GENERATOR
+# 🔄 LIVE TRANSACTION
 # =========================
 txn = {
     "amount": random.randint(1000, 20000),
@@ -161,10 +173,6 @@ txn = {
     )
 }
 
-
-# =========================
-# 📊 DISPLAY TRANSACTION
-# =========================
 st.subheader("🔄 Live Transaction Feed")
 st.json(txn)
 
@@ -177,25 +185,26 @@ p = pattern_agent(txn)
 m = ml_agent(txn)
 r = rbi_agent(txn)
 
-risk_score, decision, priority = orchestrator(v, p, m, r)
-trace = explain(txn, v, p, m, r)
+risk_score, decision = orchestrator(v, p, m, r, st.session_state.weights)
+
+shap_values = shap_explain(txn)
 
 
 # =========================
-# 🧠 AGENT OUTPUTS PANEL
+# 🧠 AGENT OUTPUTS
 # =========================
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("🧠 Agent Outputs")
-    st.write("Velocity Agent:", v)
-    st.write("Pattern Agent:", p)
-    st.write("ML Agent:", m)
-    st.write("RBI Agent:", r)
+    st.write("Velocity:", v)
+    st.write("Pattern:", p)
+    st.write("ML:", m)
+    st.write("RBI:", r)
 
 with col2:
     st.subheader("🚨 Decision Engine")
-    st.metric("Risk Score", risk_score)
+    st.metric("Risk Score", round(risk_score, 2))
 
     if decision == "ALLOW":
         st.success(decision)
@@ -206,16 +215,16 @@ with col2:
 
 
 # =========================
-# 🧠 EXPLAINABILITY TRACE
+# 🧠 EXPLAINABILITY (SHAP)
 # =========================
-st.subheader("🧠 Decision Reasoning Trace")
+st.subheader("📊 SHAP Explainability (Simulated)")
 
-for t in trace:
-    st.write("•", t)
+for k, v in shap_values.items():
+    st.write(f"{k}: impact → {v:.3f}")
 
 
 # =========================
-# 🚨 CASE MANAGEMENT SYSTEM
+# 🚨 CASE MANAGEMENT
 # =========================
 if decision != "ALLOW":
 
@@ -238,12 +247,20 @@ if decision != "ALLOW":
 # 🧠 MEMORY DASHBOARD
 # =========================
 st.subheader("🧠 Fraud Case Memory (Recent)")
-
 st.json(st.session_state.memory[-5:])
 
 
 # =========================
-# 🔁 LIVE REFRESH
+# 🔁 LEARNING LOOP UPDATE
+# =========================
+st.session_state.weights = learning_loop(decision, st.session_state.weights)
+
+st.subheader("🧠 Learning Weights (Adaptive System)")
+st.json(st.session_state.weights)
+
+
+# =========================
+# 🔁 AUTO REFRESH
 # =========================
 time.sleep(2)
 st.rerun()
