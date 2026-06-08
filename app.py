@@ -1,47 +1,29 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import time
 import joblib
 import os
 
 from langgraph.graph import StateGraph, END
 
-# -----------------------
+# -------------------------
 # MODEL
-# -----------------------
+# -------------------------
 model = None
 if os.path.exists("efrms_xgboost_model.pkl"):
     model = joblib.load("efrms_xgboost_model.pkl")
 
 
 # =========================
-# 🧠 FRAUD ML AGENT
+# 🧠 FRAUD AGENT
 # =========================
 def fraud_agent(state):
     if model:
         df = pd.DataFrame([state])
-        prob = model.predict_proba(df)[0][1]
+        state["ml_score"] = float(model.predict_proba(df)[0][1])
     else:
-        prob = state["amount"] / 100000
-
-    state["ml_score"] = float(prob)
-    return state
-
-
-# =========================
-# 🧠 RULES AGENT
-# =========================
-def rules_agent(state):
-    score = 0
-
-    if state["amount"] > 20000:
-        score += 0.4
-    if state["velocity"] > 10:
-        score += 0.3
-    if state["shared_device_count"] > 2:
-        score += 0.3
-
-    state["rule_score"] = min(score, 1.0)
+        state["ml_score"] = state["amount"] / 100000
     return state
 
 
@@ -49,64 +31,45 @@ def rules_agent(state):
 # 🧠 BEHAVIOR AGENT
 # =========================
 def behavior_agent(state):
-    anomalies = []
+    flags = []
 
-    if state["amount"] > state["avg_amount_30d"] * 3:
-        anomalies.append("SPEND_SPIKE")
+    if state["amount"] > 20000:
+        flags.append("HIGH_AMOUNT")
+    if state["velocity"] > 10:
+        flags.append("VELOCITY_SPIKE")
+    if state["shared_device_count"] > 2:
+        flags.append("DEVICE_SHARING")
 
-    if state["seconds_since_last_txn"] < 30:
-        anomalies.append("RAPID_TXN")
-
-    state["behavior_flags"] = anomalies
-    state["behavior_score"] = len(anomalies) * 0.3
-
+    state["flags"] = flags
+    state["behavior_score"] = len(flags) * 0.25
     return state
 
 
 # =========================
-# 🧠 ANOMALY AGENT
+# 🧠 SCORING
 # =========================
-def anomaly_agent(state):
-    score = np.random.uniform(0.1, 0.6)  # simulated anomaly engine
-    state["anomaly_score"] = score
-    return state
-
-
-# =========================
-# 🧠 JUDGE AGENT (REAL BRAIN)
-# =========================
-def judge_agent(state):
-
-    ml = state.get("ml_score", 0)
-    rule = state.get("rule_score", 0)
-    beh = state.get("behavior_score", 0)
-    ano = state.get("anomaly_score", 0)
-
-    # weighted voting system
-    final_score = (
-        0.4 * ml +
-        0.25 * rule +
-        0.2 * beh +
-        0.15 * ano
+def scoring_agent(state):
+    state["risk_score"] = min(
+        state["ml_score"] + state["behavior_score"],
+        1.0
     )
+    return state
 
-    state["final_score"] = final_score
 
-    if final_score > 0.75:
-        state["decision"] = "🚨 FRAUD CONFIRMED"
-    elif final_score > 0.5:
-        state["decision"] = "⚠️ SUSPICIOUS - REVIEW"
+# =========================
+# 🚨 ALERT ENGINE (AUTONOMOUS)
+# =========================
+def alert_agent(state):
+
+    if state["risk_score"] > 0.75:
+        state["alert"] = "🚨 FRAUD ALERT AUTO-GENERATED"
+        state["action"] = "FREEZE"
+    elif state["risk_score"] > 0.5:
+        state["alert"] = "⚠️ SUSPICIOUS TRANSACTION AUTO-FLAGGED"
+        state["action"] = "REVIEW"
     else:
-        state["decision"] = "✅ SAFE"
-
-    # 👇 THIS is what makes it agentic (reasoning trace)
-    state["reasoning_trace"] = {
-        "ml_agent": ml,
-        "rule_agent": rule,
-        "behavior_agent": beh,
-        "anomaly_agent": ano,
-        "judge_score": final_score
-    }
+        state["alert"] = "✅ SAFE"
+        state["action"] = "ALLOW"
 
     return state
 
@@ -118,18 +81,16 @@ def build_graph():
     g = StateGraph(dict)
 
     g.add_node("fraud_agent", fraud_agent)
-    g.add_node("rules_agent", rules_agent)
     g.add_node("behavior_agent", behavior_agent)
-    g.add_node("anomaly_agent", anomaly_agent)
-    g.add_node("judge_agent", judge_agent)
+    g.add_node("scoring_agent", scoring_agent)
+    g.add_node("alert_agent", alert_agent)
 
     g.set_entry_point("fraud_agent")
 
-    g.add_edge("fraud_agent", "rules_agent")
-    g.add_edge("rules_agent", "behavior_agent")
-    g.add_edge("behavior_agent", "anomaly_agent")
-    g.add_edge("anomaly_agent", "judge_agent")
-    g.add_edge("judge_agent", END)
+    g.add_edge("fraud_agent", "behavior_agent")
+    g.add_edge("behavior_agent", "scoring_agent")
+    g.add_edge("scoring_agent", "alert_agent")
+    g.add_edge("alert_agent", END)
 
     return g.compile()
 
@@ -138,33 +99,38 @@ app = build_graph()
 
 
 # =========================
-# UI
+# UI (NO BUTTON = AUTO SYSTEM)
 # =========================
-st.title("🏦 TRUE Agentic Fraud System (Debate AI)")
+st.title("🏦 LIVE Fraud Control Tower (Auto Agent System)")
+st.write("🔄 System continuously monitoring transactions...")
 
-amount = st.number_input("Amount", 100, 100000, 5000)
-velocity = st.slider("Velocity", 1, 50, 5)
-avg_amount_30d = st.number_input("Avg Amount 30d", 100, 100000, 4500)
-shared_device_count = st.slider("Shared Devices", 0, 10, 0)
-seconds_since_last_txn = st.slider("Seconds Since Last Txn", 10, 10000, 500)
+placeholder = st.empty()
 
-if st.button("Run Agent Debate System"):
+# =========================
+# 🔥 CONTINUOUS STREAM LOOP
+# =========================
+for i in range(50):  # simulate live transactions
 
     state = {
-        "amount": amount,
-        "velocity": velocity,
-        "avg_amount_30d": avg_amount_30d,
-        "shared_device_count": shared_device_count,
-        "seconds_since_last_txn": seconds_since_last_txn
+        "amount": np.random.randint(1000, 50000),
+        "velocity": np.random.randint(1, 30),
+        "avg_amount_30d": 4500,
+        "amount_deviation_ratio": np.random.random() * 3,
+        "seconds_since_last_txn": np.random.randint(10, 1000),
+        "shared_device_count": np.random.randint(0, 5)
     }
 
     result = app.invoke(state)
 
-    st.subheader("🧠 FINAL DECISION")
-    st.write(result["decision"])
+    with placeholder.container():
 
-    st.subheader("⚖️ AGENT DEBATE RESULTS")
-    st.json(result["reasoning_trace"])
+        st.subheader("🔴 LIVE TRANSACTION FEED")
 
-    st.subheader("📊 FINAL SCORE")
-    st.write(result["final_score"])
+        st.write("Amount:", result["amount"])
+        st.write("ML Score:", round(result["ml_score"], 3))
+        st.write("Risk Score:", round(result["risk_score"], 3))
+        st.write("Flags:", result["flags"])
+        st.write("Alert:", result["alert"])
+        st.write("Action:", result["action"])
+
+    time.sleep(1)
