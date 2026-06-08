@@ -7,17 +7,7 @@ import joblib
 import shap
 
 # =========================
-# 🧠 LOAD MODEL
-# =========================
-# Replace with your trained model path
-try:
-    model = joblib.load("xgb_model.pkl")
-except:
-    model = None  # fallback safe mode
-
-
-# =========================
-# 🧠 SESSION STATE
+# 🧠 SAFE INIT (CRITICAL FIX)
 # =========================
 if "cases" not in st.session_state:
     st.session_state.cases = []
@@ -32,7 +22,16 @@ if "weights" not in st.session_state:
 
 
 # =========================
-# 🔄 SAMPLE TRANSACTION STREAM
+# 🧠 LOAD MODEL (SAFE)
+# =========================
+try:
+    model = joblib.load("xgb_model.pkl")
+except:
+    model = None  # fallback mode if file missing
+
+
+# =========================
+# 🔄 TRANSACTION GENERATOR
 # =========================
 def generate_txn():
     return {
@@ -44,7 +43,7 @@ def generate_txn():
 
 
 # =========================
-# 🔵 FEATURE PREP
+# 🔵 FEATURE ENGINEERING
 # =========================
 def build_features(txn):
     return pd.DataFrame([[
@@ -61,42 +60,42 @@ def build_features(txn):
 
 
 # =========================
-# 🧠 ML PREDICTION
+# 🤖 ML SCORE
 # =========================
 def ml_score(txn):
     if model is None:
-        return np.random.uniform(0, 1)  # fallback demo mode
+        return float(np.random.uniform(0, 1))
 
     X = build_features(txn)
-    return model.predict_proba(X)[0][1]
+    return float(model.predict_proba(X)[0][1])
 
 
 # =========================
-# 📊 REAL SHAP EXPLAINER
+# 📊 SHAP EXPLAINER (SAFE)
 # =========================
 def explain(model, txn):
 
-    X = build_features(txn)
-
     if model is None:
         return {
-            "amount": 0.2,
-            "velocity_7d": 0.3,
+            "amount": 0.25,
+            "velocity_7d": 0.25,
             "amount_deviation": 0.25,
             "failed_txn_flag": 0.25
         }
 
+    X = build_features(txn)
+
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X)
 
-    feature_names = X.columns
-
+    features = X.columns
     explanation = {}
-    for i, f in enumerate(feature_names):
+
+    for i, f in enumerate(features):
         explanation[f] = float(abs(shap_values[0][i]))
 
     # normalize
-    total = sum(explanation.values()) + 1e-6
+    total = sum(explanation.values()) + 1e-9
     for k in explanation:
         explanation[k] /= total
 
@@ -109,7 +108,7 @@ def explain(model, txn):
 def velocity_agent(txn):
     v = txn["velocity_7d"]
     if v > 45:
-        return "CRITICAL", "Extreme velocity spike"
+        return "CRITICAL", "Extreme velocity"
     elif v > 20:
         return "SUSPICIOUS", "High velocity"
     return "NORMAL", "Stable"
@@ -118,7 +117,7 @@ def velocity_agent(txn):
 def pattern_agent(txn):
     d = txn["amount_deviation"]
     if d > 3:
-        return "SUSPICIOUS", "Strong deviation"
+        return "SUSPICIOUS", "High deviation"
     elif d > 1.5:
         return "WATCHLIST", "Moderate deviation"
     return "NORMAL", "Stable"
@@ -131,7 +130,7 @@ def rbi_agent(txn):
 
 
 # =========================
-# 🧠 DECISION ENGINE (CALIBRATED)
+# 🧠 DECISION ENGINE (HITL INCLUDED)
 # =========================
 def decision_engine(v, p, r, ml):
 
@@ -155,7 +154,7 @@ def decision_engine(v, p, r, ml):
 
     score = min(100, max(0, score))
 
-    # HITL logic (IMPORTANT)
+    # 🧑 HUMAN-IN-LOOP LOGIC
     if score >= 80:
         decision = "BLOCK & FREEZE"
     elif score >= 60:
@@ -169,7 +168,7 @@ def decision_engine(v, p, r, ml):
 
 
 # =========================
-# 🔁 LEARNING LOOP (SAFE)
+# 🔁 SAFE LEARNING LOOP
 # =========================
 def learning_loop(decision, threshold):
 
@@ -182,16 +181,16 @@ def learning_loop(decision, threshold):
 
 
 # =========================
-# 🎛 UI
+# 🎛 UI CONFIG
 # =========================
-st.set_page_config(page_title="Fraud SOC (Real ML)", layout="wide")
+st.set_page_config(page_title="Fraud SOC Control Tower", layout="wide")
 
-st.title("🏦 Fraud SOC Control Tower (REAL ML + SHAP + HITL)")
-st.caption("Production-style Explainable Fraud Intelligence System")
+st.title("🏦 Fraud SOC Control Tower (Stable Production Version)")
+st.caption("REAL ML + SHAP + HITL + Safe State Management")
 
 
 # =========================
-# 🔄 LIVE TXN
+# 🔄 LIVE TRANSACTION
 # =========================
 txn = generate_txn()
 
@@ -200,7 +199,7 @@ st.json(txn)
 
 
 # =========================
-# 🧠 ML + AGENTS
+# 🧠 RUN SYSTEM
 # =========================
 ml = ml_score(txn)
 
@@ -210,11 +209,7 @@ r = rbi_agent(txn)
 
 score, decision = decision_engine(v, p, r, ml)
 
-
-# =========================
-# 📊 SHAP EXPLANATION
-# =========================
-explanation = explain(model, txn)
+shap_values = explain(model, txn)
 
 
 # =========================
@@ -244,9 +239,9 @@ with col2:
 # =========================
 # 📊 SHAP PANEL
 # =========================
-st.subheader("📊 SHAP Explainability (Real Model)")
+st.subheader("📊 SHAP Explainability")
 
-for k, v in explanation.items():
+for k, v in shap_values.items():
     st.write(f"{k}: {v:.3f}")
 
 
@@ -274,10 +269,9 @@ if decision != "ALLOW":
 
 
 # =========================
-# 🧑 HUMAN-IN-THE-LOOP
+# 🧑 HUMAN-IN-LOOP QUEUE
 # =========================
 st.subheader("🧑 Human Review Queue")
-
 st.json(st.session_state.human_queue[-5:])
 
 
@@ -285,16 +279,17 @@ st.json(st.session_state.human_queue[-5:])
 # 🧠 CASE MEMORY
 # =========================
 st.subheader("🧠 Case Memory")
-
 st.json(st.session_state.cases[-5:])
 
 
 # =========================
-# 🔁 LEARNING UPDATE
+# 🔁 SAFE LEARNING UPDATE
 # =========================
+current_threshold = st.session_state.weights.get("threshold", 0.5)
+
 st.session_state.weights["threshold"] = learning_loop(
     decision,
-    st.session_state.weights["threshold"]
+    current_threshold
 )
 
 st.subheader("🧠 Learning State")
@@ -302,7 +297,7 @@ st.json(st.session_state.weights)
 
 
 # =========================
-# 🔁 REFRESH
+# 🔁 AUTO REFRESH
 # =========================
 time.sleep(2)
 st.rerun()
