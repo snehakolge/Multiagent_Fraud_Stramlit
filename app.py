@@ -18,8 +18,9 @@ try:
 except:
     SHAP_AVAILABLE = False
 
+
 # -----------------------------
-# LOAD MODEL
+# LOAD MODEL SAFELY
 # -----------------------------
 MODEL_PATH = "efrms_xgboost_model.pkl"
 
@@ -45,9 +46,10 @@ FEATURES = [
 
 
 # =========================================================
-# 🧠 LANGGRAPH AGENTS
+# 🧠 AGENTS (CORE LOGIC)
 # =========================================================
 
+# 1️⃣ FRAUD DETECTION AGENT
 def fraud_agent(state):
     try:
         amount = state.get("amount", 0)
@@ -65,6 +67,7 @@ def fraud_agent(state):
         return state
 
 
+# 2️⃣ BEHAVIOR ANALYSIS AGENT
 def behavior_agent(state):
     try:
         flags = []
@@ -86,13 +89,40 @@ def behavior_agent(state):
         return state
 
 
+# 3️⃣ INVESTIGATION AGENT (🔥 THIS MAKES IT AGENTIC)
+def investigator_agent(state):
+    try:
+        prob = state.get("fraud_probability", 0)
+        flags = state.get("risk_flags", [])
+
+        plan = []
+
+        if prob > 0.7:
+            plan.append("Deep transaction history analysis required")
+
+        if "VELOCITY_SPIKE" in flags:
+            plan.append("Analyze last 50 transactions")
+
+        if "DEVICE_SHARING" in flags:
+            plan.append("Perform device graph mapping")
+
+        state["investigation_plan"] = plan
+
+        return state
+
+    except:
+        state["investigation_plan"] = ["Manual review required"]
+        return state
+
+
+# 4️⃣ COMPLIANCE AGENT (RBI/EWS)
 def compliance_agent(state):
     try:
-        prob = state.get("fraud_probability", 0.5)
+        prob = state.get("fraud_probability", 0)
         flags = state.get("risk_flags", [])
 
         if prob > 0.8 or len(flags) >= 2:
-            state["compliance_status"] = "RBI ALERT (EWS TRIGGERED)"
+            state["compliance_status"] = "RBI EWS ALERT TRIGGERED"
         else:
             state["compliance_status"] = "NORMAL"
 
@@ -103,17 +133,20 @@ def compliance_agent(state):
         return state
 
 
+# 5️⃣ DECISION AGENT
 def decision_agent(state):
     try:
-        prob = state.get("fraud_probability", 0.5)
+        prob = state.get("fraud_probability", 0)
         flags = state.get("risk_flags", [])
 
         if prob > 0.85:
             state["action"] = "FREEZE + AML INVESTIGATION"
             state["risk_level"] = "CRITICAL"
+
         elif len(flags) > 0:
             state["action"] = "STEP-UP AUTHENTICATION"
             state["risk_level"] = "MEDIUM"
+
         else:
             state["action"] = "ALLOW"
             state["risk_level"] = "LOW"
@@ -127,7 +160,7 @@ def decision_agent(state):
 
 
 # =========================================================
-# 🔗 LANGGRAPH BUILD
+# 🔗 LANGGRAPH BUILD (TRUE AGENTIC FLOW)
 # =========================================================
 from langgraph.graph import StateGraph
 
@@ -136,26 +169,47 @@ def build_graph():
 
     builder.add_node("fraud_agent", fraud_agent)
     builder.add_node("behavior_agent", behavior_agent)
+    builder.add_node("investigator_agent", investigator_agent)
     builder.add_node("compliance_agent", compliance_agent)
     builder.add_node("decision_agent", decision_agent)
 
     builder.set_entry_point("fraud_agent")
 
     builder.add_edge("fraud_agent", "behavior_agent")
-    builder.add_edge("behavior_agent", "compliance_agent")
+
+
+    # 🔥 CONDITIONAL ROUTING (KEY AGENTIC FEATURE)
+    def route(state):
+        if state.get("fraud_probability", 0) > 0.7:
+            return "investigator_agent"
+        else:
+            return "compliance_agent"
+
+
+    builder.add_conditional_edges(
+        "behavior_agent",
+        route,
+        {
+            "investigator_agent": "investigator_agent",
+            "compliance_agent": "compliance_agent"
+        }
+    )
+
+    builder.add_edge("investigator_agent", "compliance_agent")
     builder.add_edge("compliance_agent", "decision_agent")
 
     return builder.compile()
 
 
-app = build_graph()   # 🔥 FIXED: THIS WAS YOUR MAIN ISSUE
+app = build_graph()
 
 
 # =========================================================
-# 🧾 SAFE INPUT UI
+# 🧾 STREAMLIT UI
 # =========================================================
 st.title("🏦 Enterprise Fraud Intelligence System")
-st.write("LangGraph Multi-Agent Fraud Detection Platform (Stable Version)")
+st.write("🔥 True LangGraph Multi-Agent Fraud Detection System")
+
 
 amount = st.number_input("Amount", 100, 100000, 5000)
 velocity = st.slider("Velocity (7d)", 1, 50, 5)
@@ -166,9 +220,9 @@ device = st.slider("Shared Device Count", 0, 10, 0)
 
 
 # =========================================================
-# 🚀 RUN SYSTEM
+# 🚀 RUN AGENTIC SYSTEM
 # =========================================================
-if st.button("Analyze Transaction"):
+if st.button("Run Fraud Investigation"):
 
     state = {
         "amount": amount,
@@ -185,28 +239,31 @@ if st.button("Analyze Transaction"):
     except Exception as e:
         result = {
             "fraud_probability": 0.5,
-            "risk_level": "FALLBACK",
+            "risk_level": "SYSTEM FALLBACK",
             "action": "MANUAL REVIEW",
             "error": str(e)
         }
 
-    # =====================================================
-    # 📊 OUTPUT
-    # =====================================================
-    st.subheader("🧠 Fraud Decision Output")
+    # -----------------------------
+    # OUTPUT
+    # -----------------------------
+    st.subheader("🧠 Final Agent Output")
 
-    st.write("Fraud Probability:", result.get("fraud_probability", 0))
-    st.write("Risk Level:", result.get("risk_level", "UNKNOWN"))
-    st.write("Action:", result.get("action", "UNKNOWN"))
-    st.write("Compliance Status:", result.get("compliance_status", "UNKNOWN"))
+    st.write("Fraud Probability:", result.get("fraud_probability"))
+    st.write("Risk Level:", result.get("risk_level"))
+    st.write("Action:", result.get("action"))
+    st.write("Compliance Status:", result.get("compliance_status"))
 
     st.subheader("🚨 Risk Flags")
     st.write(result.get("risk_flags", []))
 
+    st.subheader("🕵️ Investigation Plan (AGENT OUTPUT)")
+    st.write(result.get("investigation_plan", []))
 
-    # =====================================================
-    # 🧠 EXPLANATION LAYER (RULE BASED)
-    # =====================================================
+
+    # -----------------------------
+    # EXPLANATION LAYER
+    # -----------------------------
     st.subheader("📌 Explanation Engine")
 
     explanations = []
@@ -215,13 +272,10 @@ if st.button("Analyze Transaction"):
         explanations.append("High transaction amount detected")
 
     if velocity > 10:
-        explanations.append("Unusual velocity spike")
-
-    if deviation > 2:
-        explanations.append("Deviation from normal spending pattern")
+        explanations.append("Velocity spike detected")
 
     if device > 2:
-        explanations.append("Multiple devices linked")
+        explanations.append("Multiple device linkage")
 
     if len(explanations) == 0:
         explanations.append("No anomalies detected")
@@ -230,12 +284,12 @@ if st.button("Analyze Transaction"):
         st.write("•", e)
 
 
-    # =====================================================
-    # ⚠️ SHAP OPTIONAL
-    # =====================================================
+    # -----------------------------
+    # SHAP (OPTIONAL SAFE)
+    # -----------------------------
     st.subheader("📊 SHAP Analysis")
 
     if not SHAP_AVAILABLE or model is None:
         st.warning("SHAP not available or model not loaded")
     else:
-        st.success("SHAP ready (optional advanced mode)")
+        st.success("SHAP ready (optional mode)")
